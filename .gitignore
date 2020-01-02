@@ -110,6 +110,9 @@ ENV/
 # mypy
 .mypy_cache/
 
+# Visual Studio Code
+.vscode/
+
 # -*- mode: gitignore; -*-
 *~
 \#*\#

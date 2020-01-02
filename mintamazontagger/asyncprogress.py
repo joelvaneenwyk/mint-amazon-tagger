@@ -18,4 +18,3 @@ class AsyncProgress:
     def finish(self):
         self.spinning = False
         self.progress.finish()
-        print()

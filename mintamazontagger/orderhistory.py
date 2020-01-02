@@ -3,6 +3,8 @@ import io
 import logging
 import os
 import requests
+import datetime
+
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver import ChromeOptions
 from selenium.webdriver.common.by import By
@@ -13,7 +15,7 @@ from seleniumrequests import Chrome
 from sys import platform as _platform
 import zipfile
 
-from progress.spinner import Spinner
+from progress.spinner import Spinner, PieSpinner
 
 from mintamazontagger.asyncprogress import AsyncProgress
 
@@ -30,6 +32,15 @@ ORDER_HISTORY_URL_VIA_SWITCH_ACCOUNT_LOGIN = (
 ORDER_HISTORY_REPORT_URL = 'https://www.amazon.com/gp/b2b/reports'
 ORDER_HISTORY_PROCESS_TIMEOUT_S = 60
 
+class AmazonList:
+    items_csv = ""
+    orders_csv = ""
+    refunds_csv = ""
+
+    def __init__(self, items = "", orders = "", refunds = ""):
+        self.items_csv = items
+        self.orders_csv = orders
+        self.refunds_csv = refunds
 
 def fetch_order_history(report_download_path, start_date, end_date,
                         email=None, password=None,
@@ -38,7 +49,7 @@ def fetch_order_history(report_download_path, start_date, end_date,
     name = email.split('@')[0]
 
     report_shortnames = ['Items', 'Orders', 'Refunds']
-    report_names = ['{} {} from {:%d %b %Y} to {:%d %b %Y}'.format(
+    report_names = ['{} {} {:%Y-%m-%d} to {:%Y-%m-%d}'.format(
                     name, t, start_date, end_date)
                     for t in report_shortnames]
     report_types = ['ITEMS', 'SHIPMENTS', 'REFUNDS']
@@ -63,7 +74,7 @@ def fetch_order_history(report_download_path, start_date, end_date,
                                      headless=headless,
                                      session_path=session_path)
 
-        requestSpin = AsyncProgress(Spinner(
+        requestSpin = AsyncProgress(PieSpinner(
             'Requesting {} report '.format(report_shortname)))
         request_report(driver, report_name, report_type, start_date, end_date)
         requestSpin.finish()
@@ -90,10 +101,93 @@ def fetch_order_history(report_download_path, start_date, end_date,
     if driver:
         driver.close()
 
-    return (
+    return AmazonList(
         open(report_paths[0], 'r', encoding='utf-8'),
         open(report_paths[1], 'r', encoding='utf-8'),
         open(report_paths[2], 'r', encoding='utf-8'))
+
+
+def fetch_order_histories(
+    report_download_path, start_date, end_date,
+    email=None, password=None,
+    session_path=None, headless=False):
+    """
+    Splits up the history into multiple files and returns all
+    the files in a list.    
+    """
+
+    # Be lazy with getting the driver, as if no fetching is needed, then it's
+    # all good.
+    driver = None
+
+    email = get_email(email)
+    name = email.split('@')[0]
+
+    current_date = start_date
+    history = []
+
+    while current_date < end_date:
+        next_date = current_date + datetime.timedelta(days=300)
+
+        report_shortnames = ['Items', 'Orders', 'Refunds']
+        report_names = ['{} {} {:%Y-%m-%d} to {:%Y-%m-%d}'.format(
+                        name, t, current_date, next_date)
+                        for t in report_shortnames]
+        report_types = ['ITEMS', 'SHIPMENTS', 'REFUNDS']
+        report_paths = [os.path.join(report_download_path, name + '.csv')
+                        for name in report_names]
+
+        if not os.path.exists(report_download_path):
+            os.makedirs(report_download_path)
+
+        for report_shortname, report_type, report_name, report_path in zip(
+                report_shortnames, report_types, report_names, report_paths):
+            if os.path.exists(report_path):
+                # Report has already been fetched! Woot
+                continue
+
+            # Report is not here. Go get it
+            if not driver:
+                driver = get_amzn_driver(email, password,
+                                        headless=headless,
+                                        session_path=session_path)
+
+            requestSpin = AsyncProgress(PieSpinner(
+                'Requesting {} report '.format(report_shortname)))
+            request_report(driver, report_name, report_type, current_date, next_date)
+            requestSpin.finish()
+
+            processingSpin = AsyncProgress(Spinner(
+                'Waiting for {} report to be ready '.format(report_shortname)))
+            try:
+                wait_cond = EC.presence_of_element_located(
+                    (By.XPATH, get_report_download_link_xpath(report_name)))
+                WebDriverWait(
+                    driver, ORDER_HISTORY_PROCESS_TIMEOUT_S).until(wait_cond)
+                processingSpin.finish()
+            except TimeoutException:
+                processingSpin.finish()
+                logger.critical("Cannot find download link after a minute!")
+                exit(1)
+
+            downloadSpin = AsyncProgress(Spinner(
+                'Downloading {} report '.format(report_shortname)))
+            download_report(driver, report_name, report_path)
+            downloadSpin.finish()
+
+        history.append(AmazonList(
+            open(report_paths[0], 'r', encoding='utf-8'),
+            open(report_paths[1], 'r', encoding='utf-8'),
+            open(report_paths[2], 'r', encoding='utf-8')))
+
+        current_date = next_date
+
+    logger.info('\nAll Amazon history has been fetched. Onto tagging.')
+
+    if driver:
+        driver.close()
+
+    return history
 
 
 def get_email(email):

@@ -23,13 +23,12 @@ from mintamazontagger import tagger
 from mintamazontagger import VERSION
 from mintamazontagger.asyncprogress import AsyncProgress
 from mintamazontagger.currency import micro_usd_to_usd_string
-from mintamazontagger.orderhistory import fetch_order_history
+from mintamazontagger.orderhistory import fetch_order_history, fetch_order_histories, AmazonList
 from mintamazontagger.mintclient import MintClient
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.StreamHandler())
 logger.setLevel(logging.INFO)
-
 
 def main():
     warn_if_outdated('mint-amazon-tagger', VERSION)
@@ -51,42 +50,53 @@ def main():
     if session_path.lower() == 'none':
         session_path = None
 
-    items_csv = args.items_csv
-    orders_csv = args.orders_csv
-    refunds_csv = args.refunds_csv
+    amazon_lists = []
 
     start_date = None
-    if not items_csv or not orders_csv:
+    if not args.items_csv or not args.orders_csv:
         logger.info('Missing Items/Orders History csv. Attempting to fetch '
                     'from Amazon.com.')
         start_date = args.order_history_start_date
         duration = datetime.timedelta(days=args.order_history_num_days)
         end_date = datetime.date.today()
+
         # If a start date is given, adjust the end date based on num_days,
         # ensuring not to go beyond today.
         if start_date:
             start_date = start_date.date()
-            if start_date + duration < end_date:
+            if start_date + duration < end_date and args.order_history_num_days > 0:
                 end_date = start_date + duration
         else:
             start_date = end_date - duration
-        items_csv, orders_csv, refunds_csv = fetch_order_history(
-            args.report_download_location, start_date, end_date,
-            args.amazon_email, args.amazon_password,
-            session_path, args.headless)
 
-    if not items_csv or not orders_csv:  # Refunds are optional
-        logger.critical('Order history either not provided at command line or '
-                        'unable to fetch. Exiting.')
-        exit(1)
+        amazon_lists = fetch_order_histories(
+                args.report_download_location, start_date, end_date,
+                args.amazon_email, args.amazon_password,
+                session_path, args.headless)
+    else:
+        amazon_lists.append( AmazonList(args.items_csv, args.orders_csv, args.refunds_csv) )
 
-    orders = amazon.Order.parse_from_csv(
-        orders_csv, ProgressCounter('Parsing Orders - '))
-    items = amazon.Item.parse_from_csv(
-        items_csv, ProgressCounter('Parsing Items - '))
-    refunds = ([] if not refunds_csv
-               else amazon.Refund.parse_from_csv(
-                   refunds_csv, ProgressCounter('Parsing Refunds - ')))
+    orders = []
+    items = []
+    refunds = []
+
+    for amazon_list in amazon_lists:
+        if not amazon_list.items_csv or not amazon_list.orders_csv:  # Refunds are optional
+            logger.critical('Order history either not provided at command line or '
+                            'unable to fetch. Exiting.')
+            exit(1)
+
+        new_orders = amazon.Order.parse_from_csv(
+            amazon_list.orders_csv, ProgressCounter('Parsing Orders - '))
+        new_items = amazon.Item.parse_from_csv(
+            amazon_list.items_csv, ProgressCounter('Parsing Items - '))
+        new_refunds = ([] if not amazon_list.refunds_csv
+                else amazon.Refund.parse_from_csv(
+                    amazon_list.refunds_csv, ProgressCounter('Parsing Refunds - ')))
+
+        orders += new_orders
+        items += new_items
+        refunds += new_refunds
 
     if args.dry_run:
         logger.info('\nDry Run; no modifications being sent to Mint.\n')
