@@ -71,11 +71,18 @@ def num_lines_csv(csv_file):
 def is_empty_csv(csv_file, num_records, key='Buyer Name'):
     # Amazon likes to put "No data found for this time period" in the first
     # row.
-    # Amazon appears to be giving 0 sized CSVs now!
-    if os.stat(csv_file.name).st_size == 0:
-        return True
-    return (num_records <= 1 and next(csv.DictReader(
-        open(csv_file.name, encoding='utf-8')))[key] is None)
+    filename = csv_file_obj.name
+
+    csv_reader = csv.DictReader(open(filename, encoding='utf-8'))
+    csv_total = sum([1 for r in csv_reader])
+
+    is_empty = True
+    csv_reader_alt = csv.DictReader(open(filename, encoding='utf-8'))
+    if csv_reader_alt.line_num > 0:
+        csv_reader_next = next(csv_reader_alt)
+        is_empty = csv_reader_next[key] is None
+    
+    return csv_total <= 1 and is_empty
 
 
 def parse_from_csv_common(

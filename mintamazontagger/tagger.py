@@ -249,15 +249,12 @@ def get_mint_updates(
     # appropriate order.
     items = [si for i in items for si in i.split_by_quantity()]
 
-    order_item_to_unspsc = dict(
-        ((i.title, i.order_id), i.unspsc_code)
-        for i in items)
-
-    itemProgress = progress_factory(
-        'Matching Amazon Items with Orders',
-        len(items))
-    amazon.associate_items_with_orders(orders, items, itemProgress)
-    itemProgress.finish()
+    if items:
+        itemProgress = IncrementalBar(
+            'Matching Amazon Items with Orders',
+            max=len(items))
+        amazon.associate_items_with_orders(orders, items, itemProgress)
+        itemProgress.finish()
 
     # Only match orders that have items.
     orders = [o for o in orders if o.items]
