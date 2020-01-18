@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # This script takes Amazon "Order History Reports" and annotates your Mint
 # transactions based on actual items in each purchase. It can handle orders
 # that are split into multiple shipments/charges, and can even itemized each
@@ -6,178 +8,22 @@
 # First, you must generate and download your order history reports from:
 # https://www.amazon.com/gp/b2b/reports
 
-from collections import defaultdict, namedtuple, Counter
-import datetime
+from collections import defaultdict, Counter
 import itertools
 import logging
+
+from progress.bar import IncrementalBar
 import readchar
-import time
 
 from mintamazontagger import amazon
 from mintamazontagger import category
 from mintamazontagger import mint
-from mintamazontagger.my_progress import no_progress_factory
 from mintamazontagger.currency import micro_usd_nearly_equal
 
-from mintamazontagger.mint import (
-    get_trans_and_categories_from_pickle, dump_trans_and_categories)
-from mintamazontagger.orderhistory import fetch_order_history
 
 logger = logging.getLogger(__name__)
+logger.addHandler(logging.StreamHandler())
 logger.setLevel(logging.INFO)
-
-UpdatesResult = namedtuple(
-    'UpdatesResult',
-    field_names=(
-        'success',
-        'items', 'orders', 'refunds', 'updates', 'unmatched_orders', 'stats'),
-    defaults=(
-        False,
-        None, None, None, None, None, None))
-
-
-def create_updates(
-        args,
-        mint_client,
-        on_critical,
-        indeterminate_progress_factory=no_progress_factory,
-        determinate_progress_factory=no_progress_factory,
-        counter_progress_factory=no_progress_factory):
-    items_csv = args.items_csv
-    orders_csv = args.orders_csv
-    refunds_csv = args.refunds_csv
-
-    start_date = None
-
-    if not items_csv or not orders_csv:
-        start_date = args.order_history_start_date
-        end_date = args.order_history_end_date
-        if not args.amazon_email or not args.amazon_password:
-            on_critical(
-                'Amazon email or password is empty. Please try again')
-            return UpdatesResult()
-
-        items_csv, orders_csv, refunds_csv = fetch_order_history(
-            args.report_download_location, start_date, end_date,
-            args.amazon_email, args.amazon_password,
-            args.session_path, args.headless,
-            progress_factory=indeterminate_progress_factory)
-
-    if not items_csv or not orders_csv:  # Refunds are optional
-        on_critical(
-            'Order history either not provided at or unable to fetch. '
-            'Exiting.')
-        return UpdatesResult()
-
-    try:
-        orders = amazon.Order.parse_from_csv(
-            orders_csv,
-            progress_factory=determinate_progress_factory)
-        items = amazon.Item.parse_from_csv(
-            items_csv,
-            progress_factory=determinate_progress_factory)
-        refunds = ([] if not refunds_csv
-                   else amazon.Refund.parse_from_csv(
-                       refunds_csv,
-                       progress_factory=determinate_progress_factory))
-
-    except AttributeError as e:
-        msg = (
-            'Error while parsing Amazon Order history report CSV files: '
-            '{}'.format(e))
-        logger.exception(msg)
-        on_critical(msg)
-        return UpdatesResult()
-
-    if not len(orders):
-        on_critical(
-            'The Orders report contains no data. Try '
-            'downloading again. Report used: {}'.format(
-                orders_csv))
-        return UpdatesResult()
-    if not len(items):
-        on_critical(
-            'The Items report contains no data. Try '
-            'downloading again. Report used: {}'.format(
-                items_csv))
-        return UpdatesResult()
-
-    # Initialize the stats. Explicitly initialize stats that might not be
-    # accumulated (conditionals).
-    stats = Counter(
-        adjust_itemized_tax=0,
-        already_up_to_date=0,
-        misc_charge=0,
-        new_tag=0,
-        no_retag=0,
-        retag=0,
-        user_skipped_retag=0,
-        personal_cat=0,
-    )
-
-    if not args.pickled_epoch and (
-            not args.mint_email or not args.mint_password):
-        on_critical('Missing Mint email or password. Try again')
-        return UpdatesResult()
-
-    if args.pickled_epoch:
-        pickle_progress = indeterminate_progress_factory(
-            'Un-pickling Mint transactions from epoch: {} '.format(
-                args.pickled_epoch))
-        mint_trans, mint_category_name_to_id = (
-            get_trans_and_categories_from_pickle(
-                args.pickled_epoch, args.mint_pickle_location))
-        pickle_progress.finish()
-    else:
-        # Get the date of the oldest Amazon order.
-        if not start_date:
-            start_date = min([o.order_date for o in orders])
-            if refunds:
-                start_date = min(
-                    start_date,
-                    min([o.order_date for o in refunds]))
-
-        # Double the length of transaction history to help aid in
-        # personalized category tagging overrides.
-        # TODO: Revise this logic/date range.
-        today = datetime.date.today()
-        start_date = today - (today - start_date) * 2
-
-        cat_progress = indeterminate_progress_factory(
-            'Getting Mint Categories')
-        mint_category_name_to_id = mint_client.get_categories()
-        cat_progress.finish()
-
-        trans_progress = indeterminate_progress_factory(
-            'Getting Mint Transactions')
-        mint_transactions_json = mint_client.get_transactions(
-            start_date)
-        trans_progress.finish()
-
-        parse_progress = determinate_progress_factory(
-            'Parsing Mint Transactions', len(mint_transactions_json))
-        mint_trans = mint.Transaction.parse_from_json(
-            mint_transactions_json, parse_progress)
-        parse_progress.finish()
-
-        if args.save_pickle_backup:
-            pickle_epoch = int(time.time())
-            pickle_progress = indeterminate_progress_factory(
-                'Backing up Mint to local pickl epoch: {} '.format(
-                    pickle_epoch))
-            dump_trans_and_categories(
-                mint_trans, mint_category_name_to_id, pickle_epoch,
-                args.mint_pickle_location)
-            pickle_progress.finish()
-
-    updates, unmatched_orders = get_mint_updates(
-        orders, items, refunds,
-        mint_trans,
-        args, stats,
-        mint_category_name_to_id,
-        progress_factory=determinate_progress_factory)
-    return UpdatesResult(
-        True, items, orders, refunds, updates, unmatched_orders, stats)
 
 
 def get_mint_category_history_for_items(trans, args):
@@ -232,8 +78,7 @@ def get_mint_updates(
         orders, items, refunds,
         trans,
         args, stats,
-        mint_category_name_to_id=category.DEFAULT_MINT_CATEGORIES_TO_IDS,
-        progress_factory=no_progress_factory):
+        mint_category_name_to_id=category.DEFAULT_MINT_CATEGORIES_TO_IDS):
     mint_historic_category_renames = get_mint_category_history_for_items(
         trans, args)
 
@@ -274,7 +119,7 @@ def get_mint_updates(
         return result
 
     trans = [t for t in trans if any(
-                 any(merch_str in n for n in get_original_names(t))
+                 any(merch_str in n for n in get_original_names())
                  for merch_str in merch_whitelist)]
     stats['amazon_in_desc'] = len(trans)
     # Skip t if it's pending.
@@ -287,19 +132,19 @@ def get_mint_updates(
         trans = [t for t in trans if t.category.lower() in cat_whitelist]
 
     # Match orders.
-    orderMatchProgress = progress_factory(
+    orderMatchProgress = IncrementalBar(
         'Matching Amazon Orders w/ Mint Trans',
-        len(orders))
-    match_transactions(trans, orders, args, orderMatchProgress)
+        max=len(orders))
+    match_transactions(trans, orders, orderMatchProgress)
     orderMatchProgress.finish()
 
     unmatched_trans = [t for t in trans if not t.orders]
 
     # Match refunds.
-    refundMatchProgress = progress_factory(
+    refundMatchProgress = IncrementalBar(
         'Matching Amazon Refunds w/ Mint Trans',
-        len(refunds))
-    match_transactions(unmatched_trans, refunds, args, refundMatchProgress)
+        max=len(refunds))
+    match_transactions(unmatched_trans, refunds, refundMatchProgress)
     refundMatchProgress.finish()
 
     unmatched_orders = [o for o in orders if not o.matched]
@@ -326,9 +171,8 @@ def get_mint_updates(
     merged_orders = []
     merged_refunds = []
 
-    updateCounter = progress_factory(
-        'Determining Mint Updates',
-        len(matched_trans))
+    updateCounter = IncrementalBar('Determining Mint Updates',
+                                   max=len(matched_trans))
     updates = []
     for t in matched_trans:
         updateCounter.next()
@@ -366,16 +210,9 @@ def get_mint_updates(
             if args.description_return_prefix_override:
                 prefix = args.description_return_prefix_override
 
-            new_transactions = []
-            for r in refunds:
-                new_tran = r.to_mint_transaction(t)
-                new_transactions.append(new_tran)
-
-                # Attempt to find the category from the original purchase.
-                unspsc = order_item_to_unspsc.get((r.title, r.order_id), None)
-                if unspsc:
-                    new_tran.category = category.get_mint_category_from_unspsc(
-                        unspsc)
+            new_transactions = [
+                r.to_mint_transaction(t)
+                for r in refunds]
 
         assert micro_usd_nearly_equal(
             t.amount,
@@ -412,11 +249,11 @@ def get_mint_updates(
             if args.prompt_retag:
                 if args.num_updates > 0 and len(updates) >= args.num_updates:
                     break
-                print('\nTransaction already tagged:')
+                logger.info('\nTransaction already tagged:')
                 print_dry_run(
                     [(t, new_transactions)],
                     ignore_category=args.no_tag_categories)
-                print('\nUpdate tag to proposed? [Yn] ')
+                logger.info('\nUpdate tag to proposed? [Yn] ')
                 action = readchar.readchar()
                 if action == '':
                     exit(1)
@@ -439,15 +276,14 @@ def get_mint_updates(
     return updates, unmatched_orders + unmatched_refunds
 
 
-def mark_best_as_matched(t, list_of_orders_or_refunds, args, progress=None):
+def mark_best_as_matched(t, list_of_orders_or_refunds, progress=None):
     if not list_of_orders_or_refunds:
         return
 
     # Only consider it a match if the posted date (transaction date) is
-    # within a low number of days of the ship date of the order.
-    max_days = args.max_days_between_payment_and_shipping
-    closest_match_num_days = max_days + 365  # Large number
+    # within 3 days of the ship date of the order.
     closest_match = None
+    closest_match_num_days = 365  # Large number
 
     for orders in list_of_orders_or_refunds:
         an_order = next((o for o in orders if o.transact_date()), None)
@@ -457,7 +293,7 @@ def mark_best_as_matched(t, list_of_orders_or_refunds, args, progress=None):
         # TODO: consider orders even if it has a matched_transaction if this
         # transaction is closer.
         already_matched = any([o.matched for o in orders])
-        if (abs(num_days) <= max_days and
+        if (abs(num_days) < 4 and
                 abs(num_days) < closest_match_num_days and
                 not already_matched):
             closest_match = orders
@@ -471,7 +307,7 @@ def mark_best_as_matched(t, list_of_orders_or_refunds, args, progress=None):
             progress.next(len(closest_match))
 
 
-def match_transactions(unmatched_trans, unmatched_orders, args, progress=None):
+def match_transactions(unmatched_trans, unmatched_orders, progress=None):
     # Also works with Refund objects.
     # First pass: Match up transactions that exactly equal an order's charged
     # amount.
@@ -481,7 +317,7 @@ def match_transactions(unmatched_trans, unmatched_orders, args, progress=None):
         amount_to_orders[o.transact_amount()].append([o])
 
     for t in unmatched_trans:
-        mark_best_as_matched(t, amount_to_orders[t.amount], args, progress)
+        mark_best_as_matched(t, amount_to_orders[t.amount], progress)
 
     unmatched_orders = [o for o in unmatched_orders if not o.matched]
     unmatched_trans = [t for t in unmatched_trans if not t.orders]
@@ -501,33 +337,33 @@ def match_transactions(unmatched_trans, unmatched_orders, args, progress=None):
             amount_to_orders[orders_total].append(c)
 
     for t in unmatched_trans:
-        mark_best_as_matched(t, amount_to_orders[t.amount], args, progress)
+        mark_best_as_matched(t, amount_to_orders[t.amount], progress)
 
 
 def print_dry_run(orig_trans_to_tagged, ignore_category=False):
     for orig_trans, new_trans in orig_trans_to_tagged:
         oid = orig_trans.orders[0].order_id
-        print('\nFor Amazon {}: {}\nInvoice URL: {}'.format(
+        logger.info('\nFor Amazon {}: {}\nInvoice URL: {}'.format(
             'Order' if orig_trans.is_debit else 'Refund',
             oid, amazon.get_invoice_url(oid)))
 
         if orig_trans.children:
             for i, trans in enumerate(orig_trans.children):
-                print('{}{}) Current: \t{}'.format(
+                logger.info('{}{}) Current: \t{}'.format(
                     '\n' if i == 0 else '',
                     i + 1,
                     trans.dry_run_str()))
         else:
-            print('\nCurrent: \t{}'.format(
+            logger.info('\nCurrent: \t{}'.format(
                 orig_trans.dry_run_str()))
 
         if len(new_trans) == 1:
             trans = new_trans[0]
-            print('\nProposed: \t{}'.format(
+            logger.info('\nProposed: \t{}'.format(
                 trans.dry_run_str(ignore_category)))
         else:
             for i, trans in enumerate(reversed(new_trans)):
-                print('{}{}) Proposed: \t{}'.format(
+                logger.info('{}{}) Proposed: \t{}'.format(
                     '\n' if i == 0 else '',
                     i + 1,
                     trans.dry_run_str(ignore_category)))
