@@ -71,7 +71,7 @@ class MintClient():
         # Create a map of Mint category name to category id.
         logger.info('Creating Mint Category Map.')
         mint_api = self.get_mintapi()
-        asyncSpin = AsyncProgress(Spinner('Fetching Categories '))
+        asyncSpin = AsyncProgress('Fetching Categories ')
         categories = dict([
             (cat_dict['name'], cat_id)
             for (cat_id, cat_dict)
@@ -84,7 +84,7 @@ class MintClient():
         mint_api = self.get_mintapi()
         logger.info('Get all Mint transactions since {}.'.format(
             start_date_str))
-        asyncSpin = AsyncProgress(Spinner('Fetching Transactions '))
+        asyncSpin = AsyncProgress('Fetching Transactions ')
         transactions = mint_api.get_transactions_json(
             start_date=start_date_str,
             include_investment=False,

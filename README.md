@@ -1,5 +1,7 @@
 # Mint Transactions Tagger for Amazon Purchases
 
+<https://pypi.org/project/mint-amazon-tagger/>
+
 Do you order a lot from Amazon? Tired of everything showing up as "Amazon"
 w/ category "Shopping"? Then this tool is for you!
 
@@ -33,17 +35,22 @@ next run will wipe everything out. However, if you _DO_ want to re-tag
 previously tagged transactions, take a look at --retag_changed and
 --prompt_retag arguments.
 
-## Getting started ##
+## Getting started
 
-### Setup ###
+### Requirements
+
+* `pip install outdated`
+
+### Setup
 
 1. `pip3 install mint-amazon-tagger`
 
 2. To get the latest from time to time, update your version:
+
 `pip3 install --upgrade mint-amazon-tagger`
 
-3. Chromedriver should be fetched automatically. But if you run into issues,
-try this:
+3. Chromedriver should be fetched automatically. But if you run into issues, try this:
+
 ```
 # Mac:
 brew tap homebrew/cask
@@ -54,13 +61,13 @@ brew cask install chromedriver
 sudo apt-get install chromium-chromedriver
 ```
 
-### Running - Full Auto ###
+### Running - Full Auto
 
 This mode will fetch your Amazon Order History for you as well as tag mint.
 
 1. `mint-amazon-tagger --amazon_email email@cool.com --mint_email couldbedifferent@aol.com`
 
-### Running - Semi-Auto ###
+### Running - Semi-Auto
 
 This mode requires you to fetch your Amazon Order History manually, then the
 tagger automates the rest.
