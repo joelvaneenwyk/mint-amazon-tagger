@@ -284,7 +284,7 @@ MINT_CATS_PICKLE_FMT = 'Mint {} Categories.pickle'
 def get_trans_and_categories_from_pickle(pickle_epoch, pickle_base_path):
     label = 'Un-pickling Mint transactions from epoch: {} '.format(
         pickle_epoch)
-    asyncSpin = AsyncProgress(Spinner(label))
+    asyncSpin = AsyncProgress(label)
     trans_pickle_path = os.path.join(
         pickle_base_path, MINT_TRANS_PICKLE_FMT.format(pickle_epoch))
     cats_pickle_path = os.path.join(
@@ -301,7 +301,7 @@ def get_trans_and_categories_from_pickle(pickle_epoch, pickle_base_path):
 def dump_trans_and_categories(trans, cats, pickle_epoch, pickle_base_path):
     label = 'Backing up Mint to local pickle file, epoch: {} '.format(
         pickle_epoch)
-    asyncSpin = AsyncProgress(Spinner(label))
+    asyncSpin = AsyncProgress(label)
     if not os.path.exists(pickle_base_path):
         os.makedirs(pickle_base_path)
     trans_pickle_path = os.path.join(

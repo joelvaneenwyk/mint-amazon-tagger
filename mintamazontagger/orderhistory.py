@@ -74,13 +74,13 @@ def fetch_order_history(report_download_path, start_date, end_date,
                                      headless=headless,
                                      session_path=session_path)
 
-        requestSpin = AsyncProgress(PieSpinner(
-            'Requesting {} report '.format(report_shortname)))
+        requestSpin = AsyncProgress(
+            'Requesting {} report '.format(report_shortname))
         request_report(driver, report_name, report_type, start_date, end_date)
         requestSpin.finish()
 
-        processingSpin = AsyncProgress(Spinner(
-            'Waiting for {} report to be ready '.format(report_shortname)))
+        processingSpin = AsyncProgress(
+            'Waiting for {} report to be ready '.format(report_shortname))
         try:
             wait_cond = EC.presence_of_element_located(
                 (By.XPATH, get_report_download_link_xpath(report_name)))
@@ -92,8 +92,8 @@ def fetch_order_history(report_download_path, start_date, end_date,
             logger.critical("Cannot find download link after a minute!")
             exit(1)
 
-        downloadSpin = AsyncProgress(Spinner(
-            'Downloading {} report '.format(report_shortname)))
+        downloadSpin = AsyncProgress(
+            'Downloading {} report '.format(report_shortname))
         download_report(driver, report_name, report_path)
         downloadSpin.finish()
 
@@ -152,13 +152,13 @@ def fetch_order_histories(
                                         headless=headless,
                                         session_path=session_path)
 
-            requestSpin = AsyncProgress(PieSpinner(
-                'Requesting {} report '.format(report_shortname)))
+            requestSpin = AsyncProgress(
+                'Requesting {} report '.format(report_shortname))
             request_report(driver, report_name, report_type, current_date, next_date)
             requestSpin.finish()
 
-            processingSpin = AsyncProgress(Spinner(
-                'Waiting for {} report to be ready '.format(report_shortname)))
+            processingSpin = AsyncProgress(
+                'Waiting for {} report to be ready '.format(report_shortname))
             try:
                 wait_cond = EC.presence_of_element_located(
                     (By.XPATH, get_report_download_link_xpath(report_name)))
@@ -170,8 +170,8 @@ def fetch_order_histories(
                 logger.critical("Cannot find download link after a minute!")
                 exit(1)
 
-            downloadSpin = AsyncProgress(Spinner(
-                'Downloading {} report '.format(report_shortname)))
+            downloadSpin = AsyncProgress(
+                'Downloading {} report '.format(report_shortname))
             download_report(driver, report_name, report_path)
             downloadSpin.finish()
 
