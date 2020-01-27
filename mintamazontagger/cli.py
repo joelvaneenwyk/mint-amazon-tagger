@@ -13,9 +13,10 @@ import pickle
 import os
 import time
 
+from progress.bar import IncrementalBar
 from progress.counter import Counter as ProgressCounter
 from progress.spinner import Spinner
-from outdated import check_outdated, warn_if_outdated
+from outdated import check_outdated
 
 from mintamazontagger import amazon
 from mintamazontagger import mint
@@ -23,19 +24,19 @@ from mintamazontagger import tagger
 from mintamazontagger import VERSION
 from mintamazontagger.asyncprogress import AsyncProgress
 from mintamazontagger.currency import micro_usd_to_usd_string
-from mintamazontagger.orderhistory import fetch_order_history, fetch_order_histories, AmazonList
+from mintamazontagger.orderhistory import fetch_order_history
 from mintamazontagger.mintclient import MintClient
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.StreamHandler())
 logger.setLevel(logging.INFO)
 
+
 def main():
-    warn_if_outdated('mint-amazon-tagger', VERSION)
     is_outdated, latest_version = check_outdated('mint-amazon-tagger', VERSION)
     if is_outdated:
         print('Please update your version by running:\n'
-              'pip3 install mint-amazon-tagger --upgrade')
+              'pip3 install mint-amazon-tagger --upgrade\n\n')
 
     parser = argparse.ArgumentParser(
         description='Tag Mint transactions based on itemized Amazon history.')
@@ -50,53 +51,45 @@ def main():
     if session_path.lower() == 'none':
         session_path = None
 
-    amazon_lists = []
+    items_csv = args.items_csv
+    orders_csv = args.orders_csv
+    refunds_csv = args.refunds_csv
 
     start_date = None
-    if not args.items_csv or not args.orders_csv:
+    if not items_csv or not orders_csv:
         logger.info('Missing Items/Orders History csv. Attempting to fetch '
                     'from Amazon.com.')
         start_date = args.order_history_start_date
         duration = datetime.timedelta(days=args.order_history_num_days)
         end_date = datetime.date.today()
-
         # If a start date is given, adjust the end date based on num_days,
         # ensuring not to go beyond today.
         if start_date:
             start_date = start_date.date()
-            if start_date + duration < end_date and args.order_history_num_days > 0:
+            if start_date + duration < end_date:
                 end_date = start_date + duration
         else:
             start_date = end_date - duration
 
-        amazon_lists = fetch_order_histories(
-                args.report_download_location, start_date, end_date,
-                args.amazon_email, args.amazon_password,
-                session_path, args.headless)
-    else:
-        amazon_lists.append( AmazonList(args.items_csv, args.orders_csv, args.refunds_csv) )
+        items_csv, orders_csv, refunds_csv = fetch_order_history(
+            args.report_download_location, start_date, end_date,
+            args.amazon_email, args.amazon_password,
+            session_path, args.headless,
+            progress_factory=lambda x: AsyncProgress(Spinner(x)),
+            progress_doner=lambda x: x.finish())
 
-    orders = []
-    items = []
-    refunds = []
+    if not items_csv or not orders_csv:  # Refunds are optional
+        logger.critical('Order history either not provided at command line or '
+                        'unable to fetch. Exiting.')
+        exit(1)
 
-    for amazon_list in amazon_lists:
-        if not amazon_list.items_csv or not amazon_list.orders_csv:  # Refunds are optional
-            logger.critical('Order history either not provided at command line or '
-                            'unable to fetch. Exiting.')
-            exit(1)
-
-        new_orders = amazon.Order.parse_from_csv(
-            amazon_list.orders_csv, ProgressCounter('Parsing Orders - '))
-        new_items = amazon.Item.parse_from_csv(
-            amazon_list.items_csv, ProgressCounter('Parsing Items - '))
-        new_refunds = ([] if not amazon_list.refunds_csv
-                else amazon.Refund.parse_from_csv(
-                    amazon_list.refunds_csv, ProgressCounter('Parsing Refunds - ')))
-
-        orders += new_orders
-        items += new_items
-        refunds += new_refunds
+    orders = amazon.Order.parse_from_csv(
+        orders_csv, ProgressCounter('Parsing Orders - '))
+    items = amazon.Item.parse_from_csv(
+        items_csv, ProgressCounter('Parsing Items - '))
+    refunds = ([] if not refunds_csv
+               else amazon.Refund.parse_from_csv(
+                   refunds_csv, ProgressCounter('Parsing Refunds - ')))
 
     if not len(orders):
         logger.critical('The Orders report contains no data. Try '
@@ -149,8 +142,14 @@ def main():
         # personalized category tagging overrides.
         today = datetime.date.today()
         start_date = today - (today - start_date) * 2
+
+        asyncSpin = AsyncProgress(Spinner('Fetching Categories '))
         mint_category_name_to_id = mint_client.get_categories()
+        asyncSpin.finish()
+
+        asyncSpin = AsyncProgress(Spinner('Fetching Transactions '))
         mint_transactions_json = mint_client.get_transactions(start_date)
+        asyncSpin.finish()
 
         epoch = int(time.time())
         mint_trans = mint.Transaction.parse_from_json(mint_transactions_json)
@@ -195,8 +194,14 @@ def main():
                                  ignore_category=args.no_tag_categories)
 
     else:
-        mint_client.send_updates(
-            updates, ignore_category=args.no_tag_categories)
+        num_updates = mint_client.send_updates(
+            updates,
+            progress=IncrementalBar(
+                'Updating Mint',
+                max=len(updates)),
+            ignore_category=args.no_tag_categories)
+
+        logger.info('Sent {} updates to Mint'.format(num_updates))
 
 
 def log_amazon_stats(items, orders, refunds):
@@ -341,10 +346,6 @@ def define_args(parser):
               'prompted for it.'))
 
     # History options"
-    parser.add_argument(
-        '--order_history_location', type=str,
-        default="AMZN Reports",
-        help='Where to store the fetched Amazon "order history" reports.')
     parser.add_argument(
         '--order_history_num_days', type=int,
         default=90,
