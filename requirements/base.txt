@@ -7,5 +7,7 @@ progress
 range-key-dict
 requests
 readchar
+tldextract
+webdriver-manager
 selenium
 selenium-requests
